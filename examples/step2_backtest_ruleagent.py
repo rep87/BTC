@@ -3,8 +3,15 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from pathlib import Path
+import sys
 
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = REPO_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 
 from projectx.agents.rule_agent import RuleAgent
 from projectx.config.defaults import DEFAULT_INTERVAL, DEFAULT_SYMBOL

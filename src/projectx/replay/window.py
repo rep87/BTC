@@ -3,14 +3,21 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _ensure_utc_timestamp(value: pd.Timestamp) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tz is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
 class ReplayWindow:
     """Reveal base-interval candles in rolling wall-clock windows."""
 
     def __init__(self, df: pd.DataFrame, eval_start: pd.Timestamp, eval_end: pd.Timestamp, step_hours: int = 4):
         self._df = df.copy().sort_index()
         self._df.index = pd.to_datetime(self._df.index, utc=True)
-        self.eval_start = pd.to_datetime(eval_start, utc=True)
-        self.eval_end = pd.to_datetime(eval_end, utc=True)
+        self.eval_start = _ensure_utc_timestamp(eval_start)
+        self.eval_end = _ensure_utc_timestamp(eval_end)
         if self.eval_start >= self.eval_end:
             raise ValueError(f"eval_start must be before eval_end: {self.eval_start} >= {self.eval_end}")
         if step_hours <= 0:

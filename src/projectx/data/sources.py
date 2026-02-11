@@ -33,6 +33,12 @@ VISION_COLS = [
 
 TimestampLike = int | float | str | datetime | pd.Timestamp
 
+def _ensure_utc_timestamp(value: pd.Timestamp | datetime) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tz is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
 
 class FapiBlockedError(RuntimeError):
     """Raised when FAPI endpoint is inaccessible due to policy/geo restriction."""
@@ -135,9 +141,9 @@ class BinanceVisionKlinesSource:
             parts.append(parse_vision_zip(monthly_zip))
 
         for y, m in missing_months:
-            month_start = pd.Timestamp(year=y, month=m, day=1, tz="UTC")
+            month_start = _ensure_utc_timestamp(pd.Timestamp(year=y, month=m, day=1))
             next_month = (month_start + pd.offsets.MonthBegin(1)).to_pydatetime()
-            month_end = pd.Timestamp(next_month, tz="UTC")
+            month_end = _ensure_utc_timestamp(next_month)
             day_start = max(start, month_start)
             day_end = min(end, month_end)
             for day in iter_days(day_start, day_end):
@@ -245,9 +251,7 @@ def to_utc_timestamp(value: TimestampLike) -> pd.Timestamp:
     else:
         raise TypeError(f"Unsupported timestamp type: {type(value)}")
 
-    if ts.tzinfo is None:
-        return ts.tz_localize("UTC")
-    return ts.tz_convert("UTC")
+    return _ensure_utc_timestamp(ts)
 
 
 def standardize_raw_klines(raw_rows: list[list]) -> pd.DataFrame:
@@ -322,25 +326,30 @@ def parse_vision_zip(zip_path: Path) -> pd.DataFrame:
 
 
 def iter_months(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[int, int]]:
-    start_month = pd.Timestamp(year=start.year, month=start.month, day=1, tz="UTC")
-    end_floor = end - pd.Timedelta(milliseconds=1)
-    end_month = pd.Timestamp(year=end_floor.year, month=end_floor.month, day=1, tz="UTC")
+    start_utc = _ensure_utc_timestamp(start)
+    end_utc = _ensure_utc_timestamp(end)
+
+    start_month = _ensure_utc_timestamp(pd.Timestamp(year=start_utc.year, month=start_utc.month, day=1))
+    end_floor = end_utc - pd.Timedelta(milliseconds=1)
+    end_month = _ensure_utc_timestamp(pd.Timestamp(year=end_floor.year, month=end_floor.month, day=1))
 
     out: list[tuple[int, int]] = []
     cursor = start_month
     while cursor <= end_month:
         out.append((cursor.year, cursor.month))
         cursor = (cursor + pd.offsets.MonthBegin(1)).to_pydatetime()
-        cursor = pd.Timestamp(cursor, tz="UTC")
+        cursor = _ensure_utc_timestamp(cursor)
     return out
 
 
 def iter_days(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
-    if start >= end:
+    start_utc = _ensure_utc_timestamp(start)
+    end_utc = _ensure_utc_timestamp(end)
+    if start_utc >= end_utc:
         return []
-    cursor = pd.Timestamp(year=start.year, month=start.month, day=start.day, tz="UTC")
-    end_floor = end - pd.Timedelta(milliseconds=1)
-    last_day = pd.Timestamp(year=end_floor.year, month=end_floor.month, day=end_floor.day, tz="UTC")
+    cursor = _ensure_utc_timestamp(pd.Timestamp(year=start_utc.year, month=start_utc.month, day=start_utc.day))
+    end_floor = end_utc - pd.Timedelta(milliseconds=1)
+    last_day = _ensure_utc_timestamp(pd.Timestamp(year=end_floor.year, month=end_floor.month, day=end_floor.day))
     days: list[pd.Timestamp] = []
     while cursor <= last_day:
         days.append(cursor)
