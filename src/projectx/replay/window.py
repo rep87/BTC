@@ -9,8 +9,8 @@ class ReplayWindow:
     def __init__(self, df: pd.DataFrame, eval_start: pd.Timestamp, eval_end: pd.Timestamp, step_hours: int = 4):
         self._df = df.copy().sort_index()
         self._df.index = pd.to_datetime(self._df.index, utc=True)
-        self.eval_start = pd.Timestamp(eval_start, tz="UTC")
-        self.eval_end = pd.Timestamp(eval_end, tz="UTC")
+        self.eval_start = pd.to_datetime(eval_start, utc=True)
+        self.eval_end = pd.to_datetime(eval_end, utc=True)
         if self.eval_start >= self.eval_end:
             raise ValueError(f"eval_start must be before eval_end: {self.eval_start} >= {self.eval_end}")
         if step_hours <= 0:
