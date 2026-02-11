@@ -20,12 +20,15 @@ def main() -> None:
     eval_end = pd.Timestamp("2025-01-10 12:00:00", tz="UTC")
 
     history_start = eval_start - pd.Timedelta(days=30)
+    print("loading klines (source=auto)...")
     raw = get_or_download_klines(
         symbol=symbol,
         interval=interval,
         start_ts=history_start,
         end_ts=eval_end,
+        source="auto",
     )
+    print(f"loaded rows: {len(raw)}")
 
     indicator_yaml = Path("src/projectx/config/indicator_config.yaml")
     featured = add_indicators(raw, indicator_yaml)
