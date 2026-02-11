@@ -81,6 +81,12 @@ def get_or_download_klines(
     merged = cached
     for miss_start, miss_end in missing:
         downloaded = kline_source.fetch(symbol=symbol, interval=interval, start_ts=miss_start, end_ts=miss_end)
+        downloaded = normalize_ohlcv_frame(downloaded)
+        if downloaded.empty:
+            continue
+        if merged.empty:
+            merged = downloaded
+            continue
         merged = normalize_ohlcv_frame(pd.concat([merged, downloaded], axis=0))
 
     merged.to_parquet(cache_path)

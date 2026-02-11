@@ -16,6 +16,20 @@ BINANCE_VISION_BASE = "https://data.binance.vision/data/futures/um"
 REQUEST_TIMEOUT_SECONDS = 20
 MAX_LIMIT = 1500
 NUMERIC_COLS = ["open", "high", "low", "close", "volume"]
+VISION_COLS = [
+    "open_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "close_time",
+    "quote_asset_volume",
+    "number_of_trades",
+    "taker_buy_base_asset_volume",
+    "taker_buy_quote_asset_volume",
+    "ignore",
+]
 
 TimestampLike = int | float | str | datetime | pd.Timestamp
 
@@ -113,9 +127,7 @@ class BinanceVisionKlinesSource:
 
         for y, m in iter_months(start, end):
             monthly_name = f"{symbol.upper()}-{interval}-{y:04d}-{m:02d}.zip"
-            monthly_url = (
-                f"{BINANCE_VISION_BASE}/monthly/klines/{symbol.upper()}/{interval}/{monthly_name}"
-            )
+            monthly_url = f"{BINANCE_VISION_BASE}/monthly/klines/{symbol.upper()}/{interval}/{monthly_name}"
             monthly_zip = self._get_zip_cached(raw_dir, monthly_name, monthly_url)
             if monthly_zip is None:
                 missing_months.append((y, m))
@@ -130,9 +142,7 @@ class BinanceVisionKlinesSource:
             day_end = min(end, month_end)
             for day in iter_days(day_start, day_end):
                 daily_name = f"{symbol.upper()}-{interval}-{day.strftime('%Y-%m-%d')}.zip"
-                daily_url = (
-                    f"{BINANCE_VISION_BASE}/daily/klines/{symbol.upper()}/{interval}/{daily_name}"
-                )
+                daily_url = f"{BINANCE_VISION_BASE}/daily/klines/{symbol.upper()}/{interval}/{daily_name}"
                 daily_zip = self._get_zip_cached(raw_dir, daily_name, daily_url)
                 if daily_zip is None:
                     continue
@@ -144,8 +154,7 @@ class BinanceVisionKlinesSource:
                 "Try a wider historical date range or verify connectivity to data.binance.vision."
             )
 
-        merged = pd.concat(parts, axis=0)
-        merged = normalize_ohlcv_frame(merged)
+        merged = normalize_ohlcv_frame(pd.concat(parts, axis=0))
         out = merged[(merged.index >= start) & (merged.index < end)]
         if out.empty:
             raise RuntimeError(
@@ -200,7 +209,6 @@ class AutoKlinesSource:
         except FapiBlockedError:
             print("FAPI blocked (HTTP 451). Falling back to Binance Vision static data.")
         except RuntimeError:
-            # network/transient failures: still try fallback in auto mode
             pass
 
         vision = BinanceVisionKlinesSource(cache_root=self.cache_root)
@@ -247,23 +255,7 @@ def standardize_raw_klines(raw_rows: list[list]) -> pd.DataFrame:
         empty_idx = pd.DatetimeIndex([], name="timestamp", tz="UTC")
         return pd.DataFrame(columns=NUMERIC_COLS, index=empty_idx)
 
-    frame = pd.DataFrame(
-        raw_rows,
-        columns=[
-            "open_time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "close_time",
-            "quote_asset_volume",
-            "number_of_trades",
-            "taker_buy_base_asset_volume",
-            "taker_buy_quote_asset_volume",
-            "ignore",
-        ],
-    )
+    frame = pd.DataFrame(raw_rows, columns=VISION_COLS)
     frame["timestamp"] = pd.to_datetime(frame["open_time"], unit="ms", utc=True)
     out = frame[["timestamp", *NUMERIC_COLS]].set_index("timestamp")
     return normalize_ohlcv_frame(out)
@@ -279,31 +271,40 @@ def normalize_ohlcv_frame(df: pd.DataFrame) -> pd.DataFrame:
     out = out.sort_index()
     out = out[~out.index.duplicated(keep="last")]
     for col in NUMERIC_COLS:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=NUMERIC_COLS)
+    for col in NUMERIC_COLS:
         out[col] = out[col].astype(float)
     return out
 
 
 def parse_vision_csv_text(csv_text: str) -> pd.DataFrame:
-    frame = pd.read_csv(
-        io.StringIO(csv_text),
-        header=None,
-        names=[
-            "open_time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "close_time",
-            "quote_asset_volume",
-            "number_of_trades",
-            "taker_buy_base_asset_volume",
-            "taker_buy_quote_asset_volume",
-            "ignore",
-        ],
-    )
-    frame["timestamp"] = pd.to_datetime(frame["open_time"], unit="ms", utc=True)
-    out = frame[["timestamp", *NUMERIC_COLS]].set_index("timestamp")
+    # Read as strings first so header/no-header formats are both handled safely.
+    raw = pd.read_csv(io.StringIO(csv_text), header=None, dtype=str)
+    if raw.empty:
+        empty_idx = pd.DatetimeIndex([], name="timestamp", tz="UTC")
+        return pd.DataFrame(columns=NUMERIC_COLS, index=empty_idx)
+
+    first_cell = str(raw.iloc[0, 0]).strip().lower()
+    has_header = first_cell == "open_time" or first_cell == "timestamp"
+    if has_header:
+        raw = raw.iloc[1:].reset_index(drop=True)
+
+    # Ensure all required columns exist even if CSV is short/corrupt.
+    raw = raw.reindex(columns=range(len(VISION_COLS)))
+    raw.columns = VISION_COLS
+
+    raw["open_time"] = pd.to_numeric(raw["open_time"], errors="coerce")
+    for col in NUMERIC_COLS:
+        raw[col] = pd.to_numeric(raw[col], errors="coerce")
+
+    cleaned = raw.dropna(subset=["open_time", *NUMERIC_COLS]).copy()
+    if cleaned.empty:
+        empty_idx = pd.DatetimeIndex([], name="timestamp", tz="UTC")
+        return pd.DataFrame(columns=NUMERIC_COLS, index=empty_idx)
+
+    cleaned["timestamp"] = pd.to_datetime(cleaned["open_time"].astype("int64"), unit="ms", utc=True)
+    out = cleaned[["timestamp", *NUMERIC_COLS]].set_index("timestamp")
     return normalize_ohlcv_frame(out)
 
 
