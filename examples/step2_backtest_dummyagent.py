@@ -12,8 +12,7 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-
-from projectx.agents.rule_agent import RuleAgent
+from projectx.agents.dummy_agent import DummyAgent
 from projectx.config.defaults import DEFAULT_INTERVAL, DEFAULT_SYMBOL
 from projectx.data.cache import get_or_download_klines
 from projectx.features.indicators import add_indicators
@@ -27,7 +26,7 @@ def main() -> None:
     symbol = DEFAULT_SYMBOL
     interval = DEFAULT_INTERVAL
     eval_start = pd.Timestamp("2025-01-10 00:00:00", tz="UTC")
-    eval_end = pd.Timestamp("2025-01-12 00:00:00", tz="UTC")
+    eval_end = pd.Timestamp("2025-01-11 00:00:00", tz="UTC")  # 24h => 6 steps on 4h
 
     history_start = eval_start - pd.Timedelta(days=30)
     print("loading data (source=auto)...")
@@ -43,15 +42,14 @@ def main() -> None:
     eval_df = featured[(featured.index >= eval_start) & (featured.index < eval_end)].copy()
 
     window = ReplayWindow(featured, eval_start=eval_start, eval_end=eval_end, step_hours=4)
-    config = SimConfig()
-    engine = BacktestEngine(df_eval=eval_df, config=config)
-    result = engine.run(window=window, agent=RuleAgent())
+    agent = DummyAgent(open_step=1, close_step=2, side="long", size_pct=0.5, leverage=2)
+    engine = BacktestEngine(df_eval=eval_df, config=SimConfig())
+    result = engine.run(window=window, agent=agent)
 
-    out_dir = Path("artifacts/step2")
+    out_dir = Path("artifacts/step2_dummy")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    fills_df = pd.DataFrame([asdict(f) for f in result["fills"]])
-    fills_df.to_csv(out_dir / "trades.csv", index=False)
+    pd.DataFrame([asdict(f) for f in result["fills"]]).to_csv(out_dir / "trades.csv", index=False)
     result["equity_curve"].to_csv(out_dir / "equity.csv")
     with (out_dir / "metrics.json").open("w", encoding="utf-8") as fp:
         json.dump(result["metrics"], fp, ensure_ascii=False, indent=2)
@@ -59,17 +57,12 @@ def main() -> None:
     save_equity_plot(result["equity_curve"], out_dir / "equity.png")
     save_drawdown_plot(result["equity_curve"], out_dir / "drawdown.png")
 
-    metrics = result["metrics"]
+    m = result["metrics"]
     print(
-        f"start={metrics['start_equity']:.2f}, end={metrics['end_equity']:.2f}, "
-        f"return={metrics['total_return_pct']:.2f}%, mdd={metrics['max_drawdown_pct']:.2f}%, "
-        f"trades={metrics['num_trades']}, closes={metrics['num_closes']}, fills={metrics['num_fills']}, status={metrics['status']}"
+        f"num_trades={m['num_trades']}, num_closes={m['num_closes']}, "
+        f"num_fills={m['num_fills']}, end_equity={m['end_equity']:.2f}, status={m['status']}"
     )
-    print(f"saved: {out_dir / 'trades.csv'}")
-    print(f"saved: {out_dir / 'equity.csv'}")
-    print(f"saved: {out_dir / 'metrics.json'}")
-    print(f"saved: {out_dir / 'equity.png'}")
-    print(f"saved: {out_dir / 'drawdown.png'}")
+    print(f"saved: {out_dir}")
 
 
 if __name__ == "__main__":

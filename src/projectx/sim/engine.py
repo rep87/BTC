@@ -5,21 +5,14 @@ from typing import Any
 
 import pandas as pd
 
+from projectx.agents.decision import normalize_decision
 from projectx.agents.interface import AgentInput, BaseAgent
 from projectx.replay.window import ReplayWindow
 from projectx.sim.metrics import compute_metrics
-from projectx.sim.types import Fill, Position, SimConfig, StepDecision, clamp_leverage, clamp_size_pct
+from projectx.sim.types import Fill, Position, SimConfig, StepDecision
 
 
-def _map_action(raw_action: str) -> str:
-    action = str(raw_action).lower()
-    mapping = {
-        "risk_on": "long",
-        "risk_off": "short",
-        "observe_up": "long",
-        "observe_down": "short",
-    }
-    return mapping.get(action, action)
+MAX_DECISION_WARNINGS = 20
 
 
 def _copy_position(position: Position) -> Position:
@@ -43,13 +36,16 @@ class BacktestEngine:
         self.status = "ok"
         self.fills: list[Fill] = []
         self._state_events: list[tuple[pd.Timestamp, float, Position]] = []
+        self.decision_warnings: list[str] = []
 
     def run(self, window: ReplayWindow, agent: BaseAgent) -> dict[str, Any]:
         window.reset()
         eval_df = self.df_eval[(self.df_eval.index >= window.eval_start) & (self.df_eval.index < window.eval_end)].copy()
         if eval_df.empty:
             empty_curve = pd.DataFrame(columns=["equity", "drawdown", "position_side", "price"])
-            return {"fills": [], "equity_curve": empty_curve, "metrics": compute_metrics(empty_curve, [], "ok")}
+            metrics = compute_metrics(empty_curve, [], "ok")
+            metrics.update({"num_fills": 0, "decision_warnings": [], "first_fill_time": None, "last_fill_time": None})
+            return {"fills": [], "equity_curve": empty_curve, "metrics": metrics}
 
         indicator_cols = [
             c
@@ -70,7 +66,9 @@ class BacktestEngine:
                 indicators_enabled=indicator_cols,
             )
             output = agent.run(ai_input)
-            decision = self._parse_decision(output.decision)
+            decision, warning = normalize_decision(output.decision, self.config)
+            if warning and len(self.decision_warnings) < MAX_DECISION_WARNINGS:
+                self.decision_warnings.append(warning)
 
             decision_time = chunk.index.max()
             decision_price = float(chunk["close"].iloc[-1])
@@ -89,21 +87,17 @@ class BacktestEngine:
                 break
 
         equity_curve = self._build_equity_curve(eval_df)
-        metrics = compute_metrics(equity_curve, [asdict(f) for f in self.fills], self.status)
-        return {"fills": self.fills, "equity_curve": equity_curve, "metrics": metrics}
-
-    def _parse_decision(self, decision: dict[str, Any]) -> StepDecision:
-        action = _map_action(str(decision.get("action", "hold")))
-        if action not in {"hold", "long", "short", "close"}:
-            action = "hold"
-        size_pct = clamp_size_pct(decision.get("size_pct"), self.config.default_size_pct)
-        leverage = clamp_leverage(
-            decision.get("leverage"),
-            self.config.min_leverage,
-            self.config.max_leverage,
-            self.config.default_leverage,
+        fill_dicts = [asdict(f) for f in self.fills]
+        metrics = compute_metrics(equity_curve, fill_dicts, self.status)
+        metrics.update(
+            {
+                "num_fills": len(self.fills),
+                "decision_warnings": self.decision_warnings,
+                "first_fill_time": self.fills[0].time if self.fills else None,
+                "last_fill_time": self.fills[-1].time if self.fills else None,
+            }
         )
-        return StepDecision(action=action, size_pct=size_pct, leverage=leverage)
+        return {"fills": self.fills, "equity_curve": equity_curve, "metrics": metrics}
 
     def _equity_at_price(self, price: float) -> float:
         if self.position.side == "flat" or self.position.qty <= 0:
